@@ -1,48 +1,10 @@
 import "reflect-metadata";
 import { inject } from "inversify";
-import type {
-  BaseMapper as OrmBaseMapper,
-  MapperTableOptions,
-} from "@pangza/orm";
-import { optionalRequire } from "../optional";
 import { registerBeansFromComponent, type BeanToken } from "./bean";
 import { Container, type Ctor } from "./container";
-import { MAPPER_DELEGATE_METHODS } from "./types";
+import { MAPPER_DELEGATE_METHODS } from "./iocTypes";
 
 const MAPPER_BEAN_KEY = Symbol.for("pangza.service.mapperBean");
-
-type EntityCtor = new (...args: any[]) => object;
-
-function ormMod(): any {
-  const mod = optionalRequire("@pangza/orm");
-  if (!mod) {
-    throw new Error(
-      "[Service] 需要安装 @pangza/orm 才能使用 @Mapper / table 相关能力",
-    );
-  }
-  return mod;
-}
-
-function ormEntityMeta(entity: EntityCtor): any {
-  const mod =
-    optionalRequire("@pangza/orm/entityDecorators") ??
-    optionalRequire("@pangza/orm");
-  if (!mod?.getEntityTableMeta) {
-    throw new Error(
-      "[Service] 需要安装 @pangza/orm 才能使用实体 @Mapper(Entity)",
-    );
-  }
-  return mod.getEntityTableMeta(entity);
-}
-
-function mapperEntityKey(): symbol {
-  const mod =
-    optionalRequire("@pangza/orm/sqlDecorators") ??
-    optionalRequire("@pangza/orm");
-  return (
-    mod?.MAPPER_ENTITY_KEY ?? Symbol.for("pangza.orm.mapperEntity")
-  );
-}
 
 /**
  * 构造器注入（Inversify `@inject`），Token 为类 / 字符串 / Symbol。
@@ -125,74 +87,6 @@ export function Resource(type: BeanToken): PropertyDecorator {
       enumerable: true,
       configurable: true,
     });
-  };
-}
-
-function resolveMapperBinding(
-  tableOrEntity: string | EntityCtor,
-  idFieldOrOptions: string | MapperTableOptions = "id",
-): { tableName: string; options: string | MapperTableOptions } {
-  if (typeof tableOrEntity === "string") {
-    return { tableName: tableOrEntity, options: idFieldOrOptions };
-  }
-
-  const meta = ormEntityMeta(tableOrEntity);
-  if (!meta?.tableName) {
-    throw new Error(
-      `[Mapper] 实体 ${tableOrEntity.name} 缺少 @TableName`,
-    );
-  }
-
-  const base: MapperTableOptions =
-    typeof idFieldOrOptions === "string"
-      ? { idField: idFieldOrOptions }
-      : { ...(idFieldOrOptions ?? {}) };
-
-  return {
-    tableName: meta.tableName,
-    options: {
-      idField: base.idField ?? meta.idColumn,
-      ...base,
-      entity: tableOrEntity,
-    },
-  };
-}
-
-/**
- * @Mapper(table | Entity, idField | options?)
- * 混入 BaseMapper CRUD，并按「类」绑定到容器。
- *
- * @example
- * @Mapper(UserEntity, { logicDelete: true })
- * class UserMapper {}
- */
-export function Mapper(
-  tableOrEntity: string | EntityCtor,
-  idFieldOrOptions: string | MapperTableOptions = "id",
-): ClassDecorator {
-  return (ctor) => {
-    const Ctor = ctor as unknown as Ctor;
-    const { tableName, options } = resolveMapperBinding(
-      tableOrEntity,
-      idFieldOrOptions,
-    );
-
-    if (typeof tableOrEntity !== "string") {
-      Reflect.defineMetadata(mapperEntityKey(), tableOrEntity, ctor);
-    }
-
-    for (const method of MAPPER_DELEGATE_METHODS) {
-      (Ctor as any).prototype[method] = function (...args: unknown[]) {
-        const mapper = ormMod().table(tableName, options) as OrmBaseMapper;
-        const fn = (mapper as any)[method];
-        if (typeof fn !== "function") {
-          throw new Error(`[Mapper] 缺少方法: ${method}`);
-        }
-        return fn.apply(mapper, args);
-      };
-    }
-
-    Container.bindClass(Ctor);
   };
 }
 

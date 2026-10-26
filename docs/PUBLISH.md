@@ -1,13 +1,14 @@
 # 发包手册（@pangza/* + CLI）
 
-**可以发了。** 当前 `1.0.0` 已能完整 `build:lib`。下面按顺序在你本机终端操作（2FA / Security Key 需要你确认）。
+**可以发了。** 当前 `1.1.5` 已能完整 `build:lib`。下面按顺序在你本机终端操作（2FA / Security Key 需要你确认）。
 
 ## 发哪些包
 
 | 目录 | npm 包名 | 说明 |
 |------|----------|------|
-| `pangza/packages/core` | `@pangza/core` | 必发，先发 |
-| `pangza/packages/orm` | `@pangza/orm` | 可选模块 |
+| `pangza/packages/core` | `@pangza/core` | 必发，先发（Application / IoC / config / Json / Exception） |
+| `pangza/packages/orm` | `@pangza/orm` | ORM；含 `@Mapper` / `MapperType` |
+| `pangza/packages/validate` | `@pangza/validate` | 参数校验；含 `@Validate` |
 | `pangza/packages/auth` | `@pangza/auth` | |
 | `pangza/packages/redis` | `@pangza/redis` | |
 | `pangza/packages/log` | `@pangza/log` | |
@@ -15,7 +16,18 @@
 | `pangza/packages/encrypt` | `@pangza/encrypt` | |
 | `pangza-cli/` | `pangza` | CLI：`pangza init` / `pangza g` |
 
-> 脚本会把 `workspace:*` 临时改成 `^1.0.0` 再 publish，发完自动还原，不用手改。
+> 脚本会把 `workspace:*` 临时改成 `^1.1.5` 再 publish，发完自动还原，不用手改。
+
+## 导入约定（1.1.0）
+
+```ts
+import { Application, Service, BaseService, Value } from "@pangza/core";
+import { Mapper, MapperType, EnableOrm } from "@pangza/orm";
+import { Validate, NotNull } from "@pangza/validate";
+import Redis, { EnableRedis } from "@pangza/redis";
+```
+
+`pangza init --modules=validate` 会写入 `@pangza/validate` 依赖。
 
 ## 0. 登录 npm（只需一次）
 
@@ -60,16 +72,7 @@ pnpm run publish:lib
 node scripts/publish-lib.js --otp=123456
 ```
 
-顺序：`core → orm → auth → redis → log → schedule → encrypt`（脚本内已排好；依赖里的 `@pangza/core` 会写成 `^1.0.0`）。
-
-### 单个包补发（可选）
-
-```bash
-cd packages/core
-# 若本地仍是 workspace:*，先别手发；用根目录脚本更安全
-cd ../..
-node scripts/publish-lib.js --dry-run
-```
+顺序：`core → orm → auth → redis → log → schedule → encrypt → validate`（脚本内已排好）。
 
 ## 4. 发布 CLI（另目录）
 
@@ -84,7 +87,7 @@ npm publish --access public --otp=123456
 
 ```bash
 npx pangza --help
-npx pangza init demo-app --modules=orm --db=mysql
+npx pangza init demo-app --modules=orm,validate --db=mysql
 ```
 
 ## 5. 发完自检
@@ -92,22 +95,23 @@ npx pangza init demo-app --modules=orm --db=mysql
 ```bash
 npm view @pangza/core version
 npm view @pangza/orm version
+npm view @pangza/validate version
 npm view pangza version
-npm view @pangza/core dependencies
 ```
 
 用户侧最小安装：
 
 ```bash
 npm i @pangza/core express inversify reflect-metadata
+# 需要校验时：
+npm i @pangza/validate
 ```
 
 ## 注意
 
-1. **版本**：根目录与各包当前都是 `1.0.0`。若 npm 上已有同名同版本，要么升版本再发，要么无法覆盖（npm 不允许覆盖已发布版本）。
+1. **版本**：根目录与各包当前都是 `1.1.5`。若 npm 上已有同名同版本，要么升版本再发，要么无法覆盖。
 2. **不要**在 `packages/*/package.json` 里长期写成 `file:` 再发布；日常开发用 `workspace:*`，交给 `publish-lib.js` 改写。
-3. **旧包** `@pangza/express` 等删不掉就 `npm deprecate`，新项目只用 `@pangza/core` + `pangza` CLI。
-4. 业务仓库 `pangza-admin-express` / `bbb` 本地用 `file:../pangza/packages/*` 即可，不必等发包也能开发。
+3. **破坏性变更**：`Validate` 不再从 `@pangza/core` / Application 导出；`Mapper` / `MapperType` 改从 `@pangza/orm` 导入。
 
 ## 常用命令速查
 

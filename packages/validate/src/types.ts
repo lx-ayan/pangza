@@ -1,4 +1,4 @@
-import { ResponseCode } from "../types/enums";
+import { ResponseCode } from "@pangza/core";
 
 /** 单条校验规则 */
 export interface ValidateRule {

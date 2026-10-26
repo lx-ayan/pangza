@@ -17,7 +17,6 @@ import { optionalRequire } from '../optional';
 import { getLogger } from '../Logger';
 import { ObjectMapper } from '../Json';
 import { handleException } from '../Exception';
-import { validateMethodArgs, ValidationError } from '../Validate';
 
 import {
     getControllerPrefix,
@@ -44,6 +43,9 @@ import {
 } from './interceptors';
 
 /** 可选分包：未安装时鉴权/审计/限流/ORM 相关能力降级跳过 */
+function validateMod(): any {
+    return optionalRequire('@pangza/validate');
+}
 function authMod(): any {
     return optionalRequire('@pangza/auth');
 }
@@ -116,7 +118,8 @@ function isOrmModule(param: unknown): boolean {
 
 function resolveLogStatus(error: unknown): string {
     if (!error) return '200';
-    if (error instanceof ValidationError) {
+    const ValidationError = validateMod()?.ValidationError;
+    if (ValidationError && error instanceof ValidationError) {
         return String((error as any).code ?? 500);
     }
     const AuthError = authMod()?.AuthError;
@@ -356,7 +359,7 @@ export class Application {
         const prefix = getControllerPrefix(Ctor);
         const routes = getControllerRoutes(Ctor);
         // 经 IoC 创建，便于 @Resource(Class) / @Inject(Class) 统一走容器
-        const { Container } = require("../Service") as {
+        const { Container } = require("./container") as {
             Container: {
                 bindClass: (c: new () => object) => void;
                 get: <T>(c: new () => T) => T;
@@ -689,14 +692,16 @@ export class Application {
                         callback.length
                     );
                     if (option?.validate) {
-                        await validateMethodArgs(args, option.paramTypes ?? []);
+                        const vm = validateMod()?.validateMethodArgs;
+                        if (vm) await vm(args, option.paramTypes ?? []);
                     }
                     await callback(...args);
                 } else {
                     if (!reqCtx.skipHandler) {
                         const args = resolveCallbackArgs(req, option, callback.length);
                         if (option?.validate) {
-                            await validateMethodArgs(args, option.paramTypes ?? []);
+                            const vm = validateMod()?.validateMethodArgs;
+                            if (vm) await vm(args, option.paramTypes ?? []);
                         }
                         result = await callback(...args);
                     } else {
@@ -787,31 +792,16 @@ export {
     RequestCookie,
     Value,
 } from "./decorators";
-export { getLogger, logger, configureLogger } from "../Logger";
+export { Container } from "./container";
+export type { Ctor } from "./container";
 export {
-    JsonFormat,
-    JsonInclude,
-    JsonIncludeType,
-    JsonProperty,
-    ObjectMapper,
-    convert,
-    copyProperties,
-    pick,
-} from "../Json";
-export {
-    ControllerAdvice,
-    ExceptionHandler,
-    BizException,
-    registerHandler,
-} from "../Exception";
-export {
-    Validate,
-    NotNull,
-    Min,
-    Max,
-    Email,
-    Phone,
-    Custom,
-    validateHandler,
-    ValidationError,
-} from "../Validate";
+    Component,
+    Resource,
+    Service,
+    Inject,
+} from "./iocDecorators";
+export { Bean, getBeanMethods, registerBeansFromComponent } from "./bean";
+export type { BeanToken, BeanOptions, BeanMethodMeta } from "./bean";
+export { BaseService } from "./BaseService";
+export type { IService, MapperDelegateMethod } from "./iocTypes";
+export { MAPPER_DELEGATE_METHODS } from "./iocTypes";

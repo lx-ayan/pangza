@@ -1,7 +1,7 @@
 {
   "name": "@pangza/orm",
-  "version": "1.0.0",
-  "description": "ORM / Db / Mapper / QueryWrapper",
+  "version": "1.1.5",
+  "description": "ORM / Db / Mapper / MapperType / QueryWrapper",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

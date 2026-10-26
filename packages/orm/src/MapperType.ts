@@ -1,18 +1,15 @@
-import type { QueryWrapper } from "@pangza/orm";
-import type { IPage, PageQuery } from "@pangza/orm";
-import type { IService } from "./types";
+import type { IPage, PageQuery } from "./types";
+import type { QueryWrapper } from "./QueryWrapper";
 
 function notWired(name: string): never {
   throw new Error(`[Mapper] 方法未注入，请使用 @Mapper(table): ${name}`);
 }
 
 /**
- * Mapper 类型基类：提供与 ORM BaseMapper 对齐的方法签名。
- * 实际实现由 @Mapper(table) 覆盖原型方法。
+ * Mapper 类型基类：提供与 BaseMapper 对齐的方法签名。
+ * 实际实现由 @Mapper(table | Entity) 覆盖原型方法。
  */
-export class MapperType<T extends Record<string, any> = Record<string, any>>
-  implements IService<T>
-{
+export class MapperType<T extends Record<string, any> = Record<string, any>> {
   selectById(_id: string | number): Promise<T | null> {
     return notWired("selectById");
   }
@@ -27,7 +24,7 @@ export class MapperType<T extends Record<string, any> = Record<string, any>>
   }
   selectPage(
     _page?: PageQuery,
-    _wrapper?: QueryWrapper
+    _wrapper?: QueryWrapper,
   ): Promise<IPage<T>> {
     return notWired("selectPage");
   }

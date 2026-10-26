@@ -1,6 +1,6 @@
 import type { QueryWrapper } from "@pangza/orm";
 import type { IPage, PageQuery } from "@pangza/orm";
-import type { IService } from "./types";
+import type { IService } from "./iocTypes";
 
 function notWired(name: string): never {
   throw new Error(`[Service] 方法未注入，请使用 @Service(Mapper): ${name}`);

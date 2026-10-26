@@ -22,6 +22,7 @@ const PACKAGES = [
   "packages/log",
   "packages/schedule",
   "packages/encrypt",
+  "packages/validate",
 ];
 
 const DEP_FIELDS = [

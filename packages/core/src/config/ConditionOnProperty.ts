@@ -1,4 +1,4 @@
-import { Container, type Ctor } from "../Service/container";
+import { Container, type Ctor } from "../Application/container";
 
 const PREFIX_KEY = Symbol.for("pangza.conditionOnProperty.prefix");
 const OPTIONS_KEY = Symbol.for("pangza.conditionOnProperty.options");

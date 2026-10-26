@@ -1,4 +1,4 @@
-import { AuthUtil } from "@pangza/auth/AuthUtil";
+import { optionalRequire } from "@pangza/core";
 import { getMetaObjectHandler, getOrmConfig } from "./config";
 import type { ResolvedOrmConfig } from "./types";
 
@@ -19,6 +19,10 @@ function assignIfAbsent(
 
 async function currentUser(): Promise<unknown> {
   try {
+    const AuthUtil =
+      optionalRequire("@pangza/auth")?.AuthUtil ??
+      optionalRequire("@pangza/auth/AuthUtil")?.AuthUtil;
+    if (!AuthUtil?.getLoginIdDefaultNull) return null;
     return await AuthUtil.getLoginIdDefaultNull();
   } catch {
     return null;

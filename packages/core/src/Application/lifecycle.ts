@@ -1,4 +1,4 @@
-import { Container } from "../Service";
+import { Container } from "./container";
 import { getLogger } from "../Logger";
 import type { ApplicationDestroy, ApplicationInit } from "./types";
 

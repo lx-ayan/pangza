@@ -1,7 +1,7 @@
 {
   "name": "@pangza/core",
-  "version": "1.0.2",
-  "description": "Application / IoC / Logger / config / Json / Validate / Exception",
+  "version": "1.1.5",
+  "description": "Application / IoC / Logger / config / Json / Exception",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -12,6 +12,48 @@
       "default": "./dist/index.js"
     },
     "./package.json": "./package.json",
+    "./Application": {
+      "types": "./dist/Application/index.d.ts",
+      "require": "./dist/Application/index.js",
+      "import": "./dist/Application/index.js",
+      "default": "./dist/Application/index.js"
+    },
+    "./Logger": {
+      "types": "./dist/Logger/index.d.ts",
+      "require": "./dist/Logger/index.js",
+      "import": "./dist/Logger/index.js",
+      "default": "./dist/Logger/index.js"
+    },
+    "./Json": {
+      "types": "./dist/Json/index.d.ts",
+      "require": "./dist/Json/index.js",
+      "import": "./dist/Json/index.js",
+      "default": "./dist/Json/index.js"
+    },
+    "./Exception": {
+      "types": "./dist/Exception/index.d.ts",
+      "require": "./dist/Exception/index.js",
+      "import": "./dist/Exception/index.js",
+      "default": "./dist/Exception/index.js"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "require": "./dist/config/index.js",
+      "import": "./dist/config/index.js",
+      "default": "./dist/config/index.js"
+    },
+    "./types": {
+      "types": "./dist/types/index.d.ts",
+      "require": "./dist/types/index.js",
+      "import": "./dist/types/index.js",
+      "default": "./dist/types/index.js"
+    },
+    "./utils": {
+      "types": "./dist/utils/index.d.ts",
+      "require": "./dist/utils/index.js",
+      "import": "./dist/utils/index.js",
+      "default": "./dist/utils/index.js"
+    },
     "./*": {
       "types": "./dist/*.d.ts",
       "require": "./dist/*.js",
@@ -21,6 +63,27 @@
   },
   "typesVersions": {
     "*": {
+      "Application": [
+        "dist/Application/index.d.ts"
+      ],
+      "Logger": [
+        "dist/Logger/index.d.ts"
+      ],
+      "Json": [
+        "dist/Json/index.d.ts"
+      ],
+      "Exception": [
+        "dist/Exception/index.d.ts"
+      ],
+      "config": [
+        "dist/config/index.d.ts"
+      ],
+      "types": [
+        "dist/types/index.d.ts"
+      ],
+      "utils": [
+        "dist/utils/index.d.ts"
+      ],
       "*": [
         "dist/*",
         "dist/*/index.d.ts"
@@ -38,8 +101,7 @@
   "dependencies": {
     "js-yaml": "^5.5.0",
     "pino": "^10.3.1",
-    "pino-pretty": "^13.1.3",
-    "validator": "^13.15.35"
+    "pino-pretty": "^13.1.3"
   },
   "peerDependencies": {
     "express": "^4.18.0 || ^5.0.0",
@@ -50,7 +112,6 @@
     "@types/express": "^5.0.6",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.5.0",
-    "@types/validator": "^13.15.10",
     "express": "^5.2.1",
     "inversify": "^8.2.3",
     "reflect-metadata": "^0.2.2",

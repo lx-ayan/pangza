@@ -19,6 +19,7 @@ const ORDER = [
   "redis",
   "schedule",
   "encrypt",
+  "validate",
 ];
 
 function run(cmd, cwd = root) {
@@ -103,6 +104,22 @@ declare module "@pangza/redis/*" {
 declare module "@pangza/log/*" {
   const mod: any;
   export = mod;
+}
+`,
+    "validate.d.ts": `declare module "@pangza/validate" {
+  export class ValidationError extends Error {
+    errors: any[];
+    code: any;
+  }
+  export function validateMethodArgs(...args: any[]): Promise<void>;
+  export function Validate(): MethodDecorator;
+  export function NotNull(...args: any[]): PropertyDecorator;
+  export function Min(...args: any[]): PropertyDecorator;
+  export function Max(...args: any[]): PropertyDecorator;
+  export function Email(...args: any[]): PropertyDecorator;
+  export function Phone(...args: any[]): PropertyDecorator;
+  export function Custom(...args: any[]): PropertyDecorator;
+  export function validateHandler(...args: any[]): Promise<void>;
 }
 `,
   };
@@ -208,6 +225,7 @@ function main() {
     "@pangza/orm/*": ["../orm/dist/*"],
   });
   writeDepTsconfig("encrypt");
+  writeDepTsconfig("validate");
 
   // also disable composite on core base tsconfig for clean emit
   const coreTs = {

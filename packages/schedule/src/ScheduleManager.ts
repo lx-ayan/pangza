@@ -1,5 +1,5 @@
 import cron, { type ScheduledTask } from "node-cron";
-import { Container } from "@pangza/core/Service";
+import { Container } from "@pangza/core";
 import { OrmError } from "@pangza/orm";
 
 export interface ScheduleJobEntity {

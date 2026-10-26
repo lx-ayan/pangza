@@ -45,10 +45,28 @@ export {
 } from "./Logger";
 export type { LoggerOptions, LogLevel, PinoLogger } from "./Logger";
 
-export * from "./Service";
+export {
+  Container,
+  Component,
+  Resource,
+  Service,
+  Inject,
+  Bean,
+  getBeanMethods,
+  registerBeansFromComponent,
+  BaseService,
+  MAPPER_DELEGATE_METHODS,
+} from "./Application";
+export type {
+  Ctor,
+  BeanToken,
+  BeanOptions,
+  BeanMethodMeta,
+  IService,
+  MapperDelegateMethod,
+} from "./Application";
 export * from "./config";
 export * from "./Json";
-export * from "./Validate";
 export * from "./Exception";
 export * from "./types";
 export * from "./utils";

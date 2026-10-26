@@ -7,8 +7,8 @@ import {
   phone,
   custom,
 } from "./rules";
-import { mergeMethodValidate } from "../Application/metadata";
-import { addBeanKey } from "../Json/beanKeys";
+import { mergeMethodValidate } from "@pangza/core/Application/metadata";
+import { addBeanKey } from "@pangza/core/Json/beanKeys";
 import type { ClassRuleMap, RuleOptions, ValidateRule } from "./types";
 
 const RULES_KEY = Symbol.for("pangza.validate.rules");

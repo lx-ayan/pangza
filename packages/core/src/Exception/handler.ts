@@ -3,7 +3,6 @@ import ResponseData from "../utils/entity/ResponseData";
 import { ResponseCode } from "../types/enums";
 import { getLogger } from "../Logger";
 import { optionalRequire } from "../optional";
-import { ValidationError } from "../Validate";
 import { resolveExceptionHandler } from "./registry";
 import { BizException } from "./types";
 import type { ExceptionContext, ExceptionHandlerResult } from "./types";
@@ -18,6 +17,9 @@ function ormMod(): any {
 }
 function redisMod(): any {
   return optionalRequire("@pangza/redis");
+}
+function validateMod(): any {
+  return optionalRequire("@pangza/validate");
 }
 
 /** 判断是否像 ResponseData */
@@ -103,10 +105,10 @@ function sendBuiltin(res: Response, error: unknown): void {
       .send(ResponseData.error(error.message, error.data, error.code));
     return;
   }
-  if (error instanceof ValidationError) {
-    res
-      .status(200)
-      .send(ResponseData.error(error.message, error.errors, error.code));
+  const ValidationError = validateMod()?.ValidationError;
+  if (ValidationError && error instanceof ValidationError) {
+    const e = error as { message: string; errors: unknown; code: ResponseCode };
+    res.status(200).send(ResponseData.error(e.message, e.errors, e.code));
     return;
   }
 

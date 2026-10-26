@@ -4,6 +4,9 @@ export { Db };
 export { EnableOrm } from "./enable";
 export { ORM_MODULE_FLAG, isOrmEnabled, markOrmEnabled } from "./flag";
 export { BaseMapper } from "./BaseMapper";
+export { Mapper, MAPPER_DELEGATE_METHODS } from "./Mapper";
+export type { MapperDelegateMethod } from "./Mapper";
+export { MapperType } from "./MapperType";
 export { table, useTable, clearTableCache } from "./table";
 export { QueryWrapper, assertIdent } from "./QueryWrapper";
 export {
