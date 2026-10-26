@@ -1,0 +1,817 @@
+import express, { Express, Router, Request } from 'express';
+import fs from 'fs';
+import path from 'path';
+import { PORT, trustProxy } from '../config';
+import ResponseData from '../utils/entity/ResponseData';
+import {
+    AUTH_MIDDLEWARE_FLAG,
+    LOG_MIDDLEWARE_FLAG,
+    REDIS_MODULE_FLAG,
+    ORM_MODULE_FLAG,
+    markRedisEnabled,
+    markOrmEnabled,
+    isRedisEnabled,
+    isOrmEnabled,
+} from '../moduleFlags';
+import { optionalRequire } from '../optional';
+import { getLogger } from '../Logger';
+import { ObjectMapper } from '../Json';
+import { handleException } from '../Exception';
+import { validateMethodArgs, ValidationError } from '../Validate';
+
+import {
+    getControllerPrefix,
+    getControllerRoutes,
+    joinRoutePath,
+} from './metadata';
+import type { RouteOption } from './types';
+import { ParamType } from './types';
+import {
+    resolveCallbackArgs,
+    resolveRawCallbackArgs,
+} from './callbackArgs';
+import { hookProcessDestroy, runApplicationInits } from './lifecycle';
+import { installProcessErrorGuards } from './processGuards';
+import { warmupConnections } from './warmup';
+import {
+    addRequestInterceptor,
+    addResponseInterceptor,
+    clearInterceptors,
+    runRequestInterceptors,
+    runResponseInterceptors,
+    type RequestInterceptor,
+    type ResponseInterceptor,
+} from './interceptors';
+
+/** 可选分包：未安装时鉴权/审计/限流/ORM 相关能力降级跳过 */
+function authMod(): any {
+    return optionalRequire('@pangza/auth');
+}
+function logMod(): any {
+    return optionalRequire('@pangza/log');
+}
+function redisMod(): any {
+    return optionalRequire('@pangza/redis');
+}
+function ormMod(): any {
+    return optionalRequire('@pangza/orm');
+}
+
+const log = getLogger('Application');
+
+type RouteRuntimeMeta = RouteOption & {
+    __controllerName?: string;
+    __handlerName?: string;
+};
+
+let __isStart = false;
+
+const app: Express = express();
+// 与 server.trustProxy 对齐：false 时 req.ip 为直连地址，防伪造 X-Forwarded-For
+app.set('trust proxy', trustProxy);
+
+const router = Router();
+
+export function applicationStart() {
+    return app.listen(PORT, () => {
+        log.info(`Server is running on port ${PORT}`);
+        hookProcessDestroy();
+        // 端口已起来：并行预热连接 + ApplicationInit（均不阻塞 listen）
+        void warmupConnections().catch((err) => {
+            log.warn({ err }, '连接预热异常');
+        });
+        void runApplicationInits().catch((err) => {
+            log.error({ err }, 'ApplicationInit 阶段失败');
+        });
+    });
+}
+
+const originalListen = app.listen.bind(app);
+
+app.listen = function (...args: Parameters<typeof originalListen>) {
+    if (__isStart) {
+        throw new Error('Application already started');
+    }
+    __isStart = true;
+    return originalListen(...args);
+} as typeof app.listen;
+
+/** 判断中间件是否为 Auth 模块 */
+function isAuthMiddleware(param: unknown): boolean {
+    return typeof param === 'function' && !!(param as any)[AUTH_MIDDLEWARE_FLAG];
+}
+
+/** 判断中间件是否为 Log 模块 */
+function isLogMiddleware(param: unknown): boolean {
+    return typeof param === 'function' && !!(param as any)[LOG_MIDDLEWARE_FLAG];
+}
+
+function isRedisModule(param: unknown): boolean {
+    return typeof param === 'function' && !!(param as any)[REDIS_MODULE_FLAG];
+}
+
+function isOrmModule(param: unknown): boolean {
+    return typeof param === 'function' && !!(param as any)[ORM_MODULE_FLAG];
+}
+
+function resolveLogStatus(error: unknown): string {
+    if (!error) return '200';
+    if (error instanceof ValidationError) {
+        return String((error as any).code ?? 500);
+    }
+    const AuthError = authMod()?.AuthError;
+    const OrmError = ormMod()?.OrmError;
+    const GuardError = redisMod()?.GuardError;
+    for (const Ctor of [AuthError, OrmError, GuardError]) {
+        if (Ctor && error instanceof Ctor) {
+            return String((error as any).code ?? 500);
+        }
+    }
+    return '500';
+}
+
+class Application {
+    private static routerMounted = false;
+    private static controllersLoaded = false;
+    /** 是否已通过 registry 注册 Auth 中间件 */
+    private static authRegistered = false;
+    /** 是否已通过 registry 注册 Log 中间件 */
+    private static logRegistered = false;
+    /** 是否已 registry EnableRedis（或 Auth 绑定了 redis） */
+    private static redisRegistered = false;
+    /** 是否已 registry EnableOrm */
+    private static ormRegistered = false;
+    /** 已注册过的 Controller，防止重复挂路由 */
+    private static registeredControllers = new WeakSet<Function>();
+    /** 已 require 过的模块文件 */
+    private static loadedFiles = new Set<string>();
+    /**
+     * 自定义扫描根目录（绝对路径）。
+     * 未调用 scan() 时默认扫描 src/business。
+     */
+    private static scanRoots: string[] = [];
+
+    static getApp() {
+        return app;
+    }
+
+    /** 是否已注册 Auth 模块 */
+    static hasAuth() {
+        return this.authRegistered;
+    }
+
+    /** 是否已注册 Log 模块 */
+    static hasLog() {
+        const log = logMod();
+        return this.logRegistered || !!(log?.isLogRegistered?.());
+    }
+
+    /** 是否已启用 Redis（预热 / 连接校验） */
+    static hasRedis() {
+        return this.redisRegistered || isRedisEnabled();
+    }
+
+    /** 是否已启用 ORM（预热 / 连接校验） */
+    static hasOrm() {
+        return this.ormRegistered || isOrmEnabled();
+    }
+
+    /**
+     * 请求前拦截器（鉴权/限流之后、Controller 之前）。
+     * @example
+     * Application.addRequestInterceptor(async ({ req }) => {
+     *   console.log(req.method, req.path);
+     * });
+     */
+    static addRequestInterceptor(fn: RequestInterceptor): typeof Application {
+        addRequestInterceptor(fn);
+        return this;
+    }
+
+    /**
+     * 响应前拦截器（Controller 之后、写出之前）。
+     * 设 `ctx.wrap = false` 可跳过 ResponseData；或自行 `res.json` 后设 `ctx.handled = true`。
+     *
+     * @example
+     * Application.addResponseInterceptor(async (ctx) => {
+     *   ctx.wrap = false;
+     *   return { code: 0, result: ctx.data };
+     * });
+     */
+    static addResponseInterceptor(fn: ResponseInterceptor): typeof Application {
+        addResponseInterceptor(fn);
+        return this;
+    }
+
+    /** 清空全部请求/响应拦截器 */
+    static clearInterceptors(): typeof Application {
+        clearInterceptors();
+        return this;
+    }
+
+    /**
+     * 追加模块扫描目录（可多次调用）。
+     * 目录内带 @Controller 的类会被自动注册进路由。
+     *
+     * @example
+     * Application
+     *   .scan('src/business')
+     *   .scan('src/modules', 'src/plugins')
+     *   .registry(...).start();
+     */
+    static scan(...dirs: Array<string | string[]>): typeof Application {
+        for (const item of dirs.flat()) {
+            const abs = path.isAbsolute(item)
+                ? path.normalize(item)
+                : path.normalize(path.resolve(process.cwd(), item));
+            if (!this.scanRoots.includes(abs)) {
+                this.scanRoots.push(abs);
+            }
+        }
+        return this;
+    }
+
+    /**
+     * 挂载静态资源。
+     *
+     * @example
+     * // URL 与磁盘目录同名（相对 cwd）
+     * Application.static("public")
+     * Application.static(["public", "assets"])
+     *
+     * // 指定 URL 前缀 → 磁盘目录
+     * Application.static("/files", "upload")
+     * Application.static({ "/files": "upload", "/static": "public" })
+     *
+     * // 也可用 yaml：upload.path + upload.urlPrefix，再
+     * // app.use(UPLOAD_URL_PREFIX, express.static(UPLOAD_PATH))
+     */
+    static static(
+        urlOrMap: string | string[] | Record<string, string>,
+        rootDir?: string
+    ) {
+        const mount = (url: string, dir: string) => {
+            const abs = path.isAbsolute(dir)
+                ? path.normalize(dir)
+                : path.resolve(process.cwd(), dir);
+            app.use(url, express.static(abs));
+        };
+
+        if (
+            urlOrMap &&
+            typeof urlOrMap === "object" &&
+            !Array.isArray(urlOrMap)
+        ) {
+            for (const [url, dir] of Object.entries(urlOrMap)) {
+                mount(url, dir);
+            }
+            return this;
+        }
+
+        if (typeof urlOrMap === "string" && rootDir !== undefined) {
+            mount(urlOrMap, rootDir);
+            return this;
+        }
+
+        if (Array.isArray(urlOrMap)) {
+            for (const item of urlOrMap) {
+                mount(item, item);
+            }
+            return this;
+        }
+
+        if (typeof urlOrMap === "string") {
+            mount(urlOrMap, urlOrMap);
+        }
+        return this;
+    }
+
+    /** 当前扫描根目录（只读） */
+    static getScanRoots(): string[] {
+        return [...this.scanRoots];
+    }
+
+    /**
+     * 启动服务：
+     * 自动 loadControllers → routes → listen
+     * 使用者通常只需 registry(...).start()
+     */
+    static start() {
+        installProcessErrorGuards();
+        if (!this.controllersLoaded) {
+            this.loadControllers();
+        }
+        this.routes();
+        applicationStart();
+        return this;
+    }
+
+    static registry(param: any) {
+        const list = Array.isArray(param) ? param : [param];
+        for (const item of list) {
+            if (isAuthMiddleware(item)) {
+                this.authRegistered = true;
+                // Auth 显式绑定了 redis 实现时，视为启用 Redis
+                const getAuthOptions = authMod()?.getAuthOptions;
+                if (getAuthOptions?.()?.redis) {
+                    this.redisRegistered = true;
+                    markRedisEnabled(true);
+                }
+            }
+            if (isLogMiddleware(item)) {
+                this.logRegistered = true;
+            }
+            if (isRedisModule(item)) {
+                this.redisRegistered = true;
+                markRedisEnabled(true);
+            }
+            if (isOrmModule(item)) {
+                this.ormRegistered = true;
+                markOrmEnabled(true);
+            }
+        }
+        Array.isArray(param) ? app.use(...param) : app.use(param);
+        return this;
+    }
+
+    /** 路由统一挂一次，放在所有中间件之后 */
+    static routes() {
+        if (!this.routerMounted) {
+            app.use(router);
+            this.routerMounted = true;
+        }
+        return this;
+    }
+
+    /**
+     * 注册装饰器 Controller：读取元数据并挂到现有 GET/POST/...
+     * 同一类只会注册一次（@Controller 触发 + 扫描 require 安全）。
+     */
+    static registerController(Ctor: new () => object) {
+        if (this.registeredControllers.has(Ctor)) {
+            return this;
+        }
+        this.registeredControllers.add(Ctor);
+
+        const prefix = getControllerPrefix(Ctor);
+        const routes = getControllerRoutes(Ctor);
+        // 经 IoC 创建，便于 @Resource(Class) / @Inject(Class) 统一走容器
+        const { Container } = require("../Service") as {
+            Container: {
+                bindClass: (c: new () => object) => void;
+                get: <T>(c: new () => T) => T;
+            };
+        };
+        Container.bindClass(Ctor);
+        const instance = Container.get(Ctor);
+
+        for (const route of routes) {
+            const fullPath = joinRoutePath(prefix, route.path);
+            const method = (instance as Record<string, unknown>)[route.handlerName];
+            if (typeof method !== 'function') {
+                throw new Error(
+                    `[Application] ${Ctor.name}.${route.handlerName} 不是函数`
+                );
+            }
+            const handler = (method as (...args: any[]) => any).bind(instance);
+            const option: RouteRuntimeMeta = {
+                ...route.option,
+                // 透传控制器/方法名，便于操作日志与限流 key
+                __controllerName: Ctor.name,
+                __handlerName: route.handlerName,
+            };
+            switch (route.method) {
+                case 'GET':
+                    this.GET(fullPath, handler, option);
+                    break;
+                case 'POST':
+                    this.POST(fullPath, handler, option);
+                    break;
+                case 'PUT':
+                    this.PUT(fullPath, handler, option);
+                    break;
+                case 'DELETE':
+                    this.DELETE(fullPath, handler, option);
+                    break;
+            }
+        }
+        return this;
+    }
+
+    /**
+     * 扫描并加载模块文件。
+     * - 未 scan 时默认：src/business
+     * - 可 Application.scan('src/modules') 自定义多个根目录
+     * - 优先按 entity → mapper → service → controller → advice 顺序加载，
+     *   再递归加载根下其余文件（兼容自定义目录结构）。
+     * - 凡被 @Controller 标记的类，加载时自动注入路由。
+     *
+     * @param dir 仅加载该目录（绝对或相对 cwd）
+     */
+    static loadControllers(dir?: string) {
+        if (this.controllersLoaded && !dir) {
+            return this;
+        }
+        if (dir) {
+            const abs = path.isAbsolute(dir)
+                ? path.normalize(dir)
+                : path.normalize(path.resolve(process.cwd(), dir));
+            this.loadScanRoot(abs);
+            return this;
+        }
+
+        const roots =
+            this.scanRoots.length > 0
+                ? [...this.scanRoots]
+                : [path.resolve(__dirname, "../../business")];
+
+        for (const root of roots) {
+            this.loadScanRoot(root);
+        }
+        this.controllersLoaded = true;
+        return this;
+    }
+
+    /** 加载单个扫描根：分层目录优先，再兜底全量递归（跳过已加载的 phase 目录） */
+    private static loadScanRoot(root: string) {
+        if (!fs.existsSync(root)) {
+            log.warn(`扫描目录不存在: ${root}`);
+            return;
+        }
+
+        // IOC / 依赖友好顺序（存在才加载）
+        const phases = [
+            "entity",
+            "mapper",
+            "service",
+            "controller",
+            "controllers",
+            "advice",
+            "modules",
+        ];
+        const loadedPhaseDirs = new Set<string>();
+        for (const phase of phases) {
+            const dir = path.join(root, phase);
+            if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+                const norm = path.normalize(dir);
+                loadedPhaseDirs.add(norm);
+                this.loadModuleFiles(dir);
+            }
+        }
+        // 兜底：根下其余文件（跳过已扫过的 phase，避免重复 readdir）
+        this.loadModuleFiles(root, loadedPhaseDirs);
+    }
+
+    private static loadModuleFiles(
+        dir: string,
+        skipDirs: Set<string> = new Set()
+    ) {
+        if (!fs.existsSync(dir)) {
+            return;
+        }
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                if (skipDirs.has(path.normalize(full))) {
+                    continue;
+                }
+                this.loadModuleFiles(full, skipDirs);
+                continue;
+            }
+            // 跳过类型声明与 source map
+            if (
+                !/\.(ts|js|mts|cts|cjs|mjs)$/.test(entry.name) ||
+                entry.name.endsWith(".d.ts") ||
+                entry.name.endsWith(".map")
+            ) {
+                continue;
+            }
+            const resolved = path.normalize(full);
+            if (this.loadedFiles.has(resolved)) {
+                continue;
+            }
+            this.loadedFiles.add(resolved);
+            try {
+                require(resolved);
+            } catch (err) {
+                // 单个业务模块加载失败：打日志并继续，避免整站起不来
+                log.error(
+                    { err, file: resolved },
+                    '加载模块失败，已跳过'
+                );
+            }
+        }
+    }
+
+    /**
+     * 路由鉴权优先级：
+     * 1. 未注册 Auth → 直接放行（最高）
+     * 2. Auth 全局 ignore → 放行
+     * 3. 接口 option.auth.ignore → 放行
+     * 4. 校验登录
+     * 5. 角色 / 权限按 mode 校验（默认 OR，可在装饰器或 Auth.checkMode 覆盖）
+     *    - 只配一类：按该类的 mode
+     *    - 两类都是 OR：角色或权限命中任一即过
+     *    - 其它：两类都要通过（各类内部仍按自己的 mode）
+     */
+    private static async applyRouteAuth(option: RouteOption = {}, req: Request) {
+        if (!this.hasAuth()) {
+            return;
+        }
+        const auth = authMod();
+        if (!auth) return;
+        const { AuthUtil, getAuthOptions, isGloballyIgnored } = auth;
+        if (isGloballyIgnored?.(req.path)) {
+            return;
+        }
+        if (option.auth?.ignore) {
+            return;
+        }
+        await AuthUtil.checkLogin();
+
+        const roles = option.auth?.roles ?? [];
+        const permissions = option.auth?.permissions ?? [];
+        if (roles.length === 0 && permissions.length === 0) {
+            return;
+        }
+
+        const fallback = getAuthOptions?.()?.checkMode ?? "OR";
+        const roleMode = option.auth?.roleMode ?? fallback;
+        const permissionMode = option.auth?.permissionMode ?? fallback;
+
+        const roleHit = await this.matchAuthList(
+            roles,
+            roleMode,
+            (item) => AuthUtil.hasRole(item)
+        );
+        const permissionHit = await this.matchAuthList(
+            permissions,
+            permissionMode,
+            (item) => AuthUtil.hasPermission(item)
+        );
+
+        const bothOr =
+            roles.length > 0 &&
+            permissions.length > 0 &&
+            roleMode === "OR" &&
+            permissionMode === "OR";
+        if (bothOr) {
+            if (roleHit.ok || permissionHit.ok) return;
+            await AuthUtil.checkRole(roleHit.missing ?? roles[0]);
+            return;
+        }
+
+        if (roles.length > 0 && !roleHit.ok) {
+            await AuthUtil.checkRole(roleHit.missing ?? roles[0]);
+        }
+        if (permissions.length > 0 && !permissionHit.ok) {
+            await AuthUtil.checkPermission(permissionHit.missing ?? permissions[0]);
+        }
+    }
+
+    /** 空列表视为未配置（ok=true 且 empty）。OR 命中任一；AND 必须全部命中。 */
+    private static async matchAuthList(
+        list: string[],
+        mode: "OR" | "AND",
+        has: (item: string) => Promise<boolean>
+    ): Promise<{ ok: boolean; missing?: string }> {
+        if (list.length === 0) return { ok: true };
+        if (mode === "AND") {
+            for (const item of list) {
+                if (!(await has(item))) return { ok: false, missing: item };
+            }
+            return { ok: true };
+        }
+        for (const item of list) {
+            if (await has(item)) return { ok: true };
+        }
+        return { ok: false, missing: list[0] };
+    }
+
+    /**
+     * 路由响应发送后异步写操作日志：
+     * - 不 await，不阻塞主业务与 HTTP 响应
+     * - setImmediate 再丢到下一事件循环，进一步与请求链路解耦
+     * - 写入失败只打日志，不影响已返回的业务结果
+     */
+    private static scheduleOperationLog(
+        req: Request,
+        option: RouteOption | undefined,
+        payload: {
+            result?: unknown;
+            error?: unknown;
+            startTime: number;
+        }
+    ) {
+        if (!option?.log || !this.hasLog()) return;
+        const log = logMod();
+        if (!log?.recordOperationLog) return;
+        const meta = option as RouteRuntimeMeta;
+        const logOption = option.log;
+        // 必须在请求结束前同步取 IP：setImmediate 后 socket 可能已释放
+        const clientIp = log.getClientIp?.(req) ?? "";
+        const userAgent = String(req.headers["user-agent"] || "");
+        const ctx = {
+            req,
+            option: logOption,
+            result: payload.result,
+            error: payload.error,
+            statusCode: resolveLogStatus(payload.error),
+            startTime: payload.startTime,
+            controllerName: meta.__controllerName,
+            clientIp,
+            userAgent,
+        };
+        setImmediate(() => {
+            void log.recordOperationLog(ctx);
+        });
+    }
+
+    /** 限流 + 防重复提交（在鉴权之后、业务之前） */
+    private static async applyRouteGuards(
+        option: RouteOption | undefined,
+        req: Request
+    ) {
+        const redis = redisMod();
+        if (!redis) return;
+        const meta = option as RouteRuntimeMeta | undefined;
+        await redis.applyRateLimit?.(option?.rateLimit, req, {
+            controllerName: meta?.__controllerName,
+            handlerName: meta?.__handlerName,
+        });
+        await redis.applyRepeatSubmit?.(option?.repeatSubmit, req);
+    }
+
+    /** SSE 默认头：Content-Type / 禁缓存 / 长连接 / 关 nginx 缓冲 */
+    private static prepareFluxResponse(req: Request, response: express.Response) {
+        response.status(200);
+        response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+        response.setHeader("Cache-Control", "no-cache, no-transform");
+        response.setHeader("Connection", "keep-alive");
+        response.setHeader("X-Accel-Buffering", "no");
+        if (typeof response.flushHeaders === "function") {
+            response.flushHeaders();
+        }
+        req.socket?.setTimeout?.(0);
+        req.socket?.setNoDelay?.(true);
+    }
+
+    private static mountRoute(
+        method: 'get' | 'post' | 'put' | 'delete',
+        path: string,
+        callback: (...args: any[]) => any,
+        option?: RouteOption
+    ) {
+        router[method](path, async (req, response) => {
+            const startTime = Date.now();
+            let result: unknown;
+            let error: unknown;
+            try {
+                await this.applyRouteAuth(option, req);
+                await this.applyRouteGuards(option, req);
+
+                const reqCtx = await runRequestInterceptors(req, response, option);
+                if (response.headersSent) {
+                    return;
+                }
+
+                if (option?.flux || option?.raw) {
+                    if (reqCtx.skipHandler) {
+                        return;
+                    }
+                    if (option?.flux) {
+                        this.prepareFluxResponse(req, response);
+                    }
+                    const args = resolveRawCallbackArgs(
+                        req,
+                        response,
+                        option,
+                        callback.length
+                    );
+                    if (option?.validate) {
+                        await validateMethodArgs(args, option.paramTypes ?? []);
+                    }
+                    await callback(...args);
+                } else {
+                    if (!reqCtx.skipHandler) {
+                        const args = resolveCallbackArgs(req, option, callback.length);
+                        if (option?.validate) {
+                            await validateMethodArgs(args, option.paramTypes ?? []);
+                        }
+                        result = await callback(...args);
+                    } else {
+                        result = reqCtx.data;
+                    }
+
+                    const serialized = ObjectMapper.writeValue(result);
+                    const resCtx = await runResponseInterceptors({
+                        req,
+                        res: response,
+                        option,
+                        data: serialized,
+                    });
+                    if (resCtx.handled || response.headersSent) {
+                        result = resCtx.data;
+                        return;
+                    }
+                    result = resCtx.data;
+                    if (resCtx.wrap) {
+                        response.send(ResponseData.success(resCtx.data));
+                    } else {
+                        response.send(resCtx.data);
+                    }
+                }
+            } catch (e) {
+                error = e;
+                await handleException(req, response, e);
+            } finally {
+                this.scheduleOperationLog(req, option, {
+                    result: error ? undefined : result,
+                    error,
+                    startTime,
+                });
+            }
+        });
+        return this;
+    }
+
+    static GET<T>(path: string, callback: (...args: any[]) => T | Promise<T>, option?: RouteOption) {
+        return this.mountRoute('get', path, callback, option);
+    }
+
+    static POST<T>(path: string, callback: (...args: any[]) => T | Promise<T>, option?: RouteOption) {
+        return this.mountRoute('post', path, callback, option);
+    }
+
+    static PUT<T>(path: string, callback: (...args: any[]) => T | Promise<T>, option?: RouteOption) {
+        return this.mountRoute('put', path, callback, option);
+    }
+
+    static DELETE<T>(path: string, callback: (...args: any[]) => T | Promise<T>, option?: RouteOption) {
+        return this.mountRoute('delete', path, callback, option);
+    }
+}
+
+export default Application;
+export { ParamType };
+export type { RouteOption, ApplicationInit, ApplicationDestroy } from './types';
+export type {
+    RequestInterceptor,
+    ResponseInterceptor,
+    RequestInterceptorContext,
+    ResponseInterceptorContext,
+} from './interceptors';
+export {
+    runApplicationInits,
+    runApplicationDestroys,
+    hookProcessDestroy,
+    isApplicationInit,
+    isApplicationDestroy,
+} from './lifecycle';
+export {
+    Controller,
+    GetMapping,
+    PostMapping,
+    PutMapping,
+    DeleteMapping,
+    AuthCheckLogin,
+    AuthCheckRole,
+    AuthCheckPermission,
+    AuthIgnore,
+    Log,
+    Flux,
+    RequestBody,
+    RequestQuery,
+    RequestPath,
+    RequestHeader,
+    RequestCookie,
+    Value,
+} from "./decorators";
+export { getLogger, logger, configureLogger } from "../Logger";
+export {
+    JsonFormat,
+    JsonInclude,
+    JsonIncludeType,
+    JsonProperty,
+    ObjectMapper,
+    convert,
+    copyProperties,
+    pick,
+} from "../Json";
+export {
+    ControllerAdvice,
+    ExceptionHandler,
+    BizException,
+    registerHandler,
+} from "../Exception";
+export {
+    Validate,
+    NotNull,
+    Min,
+    Max,
+    Email,
+    Phone,
+    Custom,
+    validateHandler,
+    ValidationError,
+} from "../Validate";
