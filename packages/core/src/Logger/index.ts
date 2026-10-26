@@ -185,7 +185,7 @@ export const logger = {
 /**
  * 可选模块工厂：Application.registry(Logger({ level: 'debug' }))
  */
-export default function Logger(options: LoggerOptions = {}) {
+export function Logger(options: LoggerOptions = {}) {
   configureLogger(options);
   const middleware = (
     _req: unknown,
@@ -198,6 +198,8 @@ export default function Logger(options: LoggerOptions = {}) {
   });
   return middleware;
 }
+
+export default Logger;
 
 export type { PinoLogger };
 export type { LoggerOptions, LogLevel } from "./types";

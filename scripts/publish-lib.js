@@ -78,19 +78,32 @@ function withPublishablePackageJson(rel, fn) {
 }
 
 function assertCoreExports() {
-  const main = require(path.join(root, "packages", "core", "dist", "index.js"));
-  for (const key of [
-    "Application",
-    "Service",
-    "Resource",
-    "Logger",
-    "Controller",
-  ]) {
-    if (main[key] == null) {
-      throw new Error(`[publish:lib] @pangza/core missing export: ${key}`);
+  // core config loads application.yaml from cwd — use repo root (has one for smoke)
+  const prev = process.cwd();
+  try {
+    process.chdir(root);
+    const main = require(path.join(
+      root,
+      "packages",
+      "core",
+      "dist",
+      "index.js",
+    ));
+    for (const key of [
+      "Application",
+      "Service",
+      "Resource",
+      "Logger",
+      "Controller",
+    ]) {
+      if (main[key] == null) {
+        throw new Error(`[publish:lib] @pangza/core missing export: ${key}`);
+      }
     }
+    console.log("[publish:lib] @pangza/core exports OK");
+  } finally {
+    process.chdir(prev);
   }
-  console.log("[publish:lib] @pangza/core exports OK");
 }
 
 function publishDir(rel, { otp, dryRun }) {

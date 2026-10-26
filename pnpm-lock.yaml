@@ -93,8 +93,6 @@ importers:
         specifier: ^9.0.3
         version: 9.0.3
 
-  packages/cli: {}
-
   packages/core:
     dependencies:
       js-yaml:

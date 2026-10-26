@@ -1,0 +1,4 @@
+# For local require/smoke during publish only
+server:
+  port: 3990
+  trustProxy: false

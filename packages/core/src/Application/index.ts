@@ -130,7 +130,7 @@ function resolveLogStatus(error: unknown): string {
     return '500';
 }
 
-class Application {
+export class Application {
     private static routerMounted = false;
     private static controllersLoaded = false;
     /** 是否已通过 registry 注册 Auth 中间件 */
