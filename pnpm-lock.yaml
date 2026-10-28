@@ -147,8 +147,8 @@ importers:
   packages/redis:
     dependencies:
       '@pangza/core':
-        specifier: ^1.0.0
-        version: 1.0.0(express@5.3.0)(inversify@8.2.3(reflect-metadata@0.2.2))(reflect-metadata@0.2.2)
+        specifier: workspace:*
+        version: link:../core
       redis:
         specifier: ^6.2.1
         version: 6.3.0
@@ -272,14 +272,6 @@ packages:
 
   '@js-joda/core@6.3.0':
     resolution: {integrity: sha512-mdmjc6lJkTCORsHlMxBT9XM1yLqgtsNZmv/Hwme2v/HIb15D2XcmklZKTnynqBgsSizA9SkFvzpuksfIXhDV/w==}
-
-  '@pangza/core@1.0.0':
-    resolution: {integrity: sha512-G02Qu9Zh//zCihadMFX0G2gv5fZonbgXKrG15F1zVHZGDPWbS/qRIPouz9SGFTfNTtkexg2bE8GEHpR7s7qksw==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      express: ^4.18.0 || ^5.0.0
-      inversify: ^6.0.0 || ^8.0.0
-      reflect-metadata: ^0.1.13 || ^0.2.0
 
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
@@ -1185,16 +1177,6 @@ snapshots:
       reflect-metadata: 0.2.2
 
   '@js-joda/core@6.3.0': {}
-
-  '@pangza/core@1.0.0(express@5.3.0)(inversify@8.2.3(reflect-metadata@0.2.2))(reflect-metadata@0.2.2)':
-    dependencies:
-      express: 5.3.0
-      inversify: 8.2.3(reflect-metadata@0.2.2)
-      js-yaml: 5.5.0
-      pino: 10.4.0
-      pino-pretty: 13.2.0
-      reflect-metadata: 0.2.2
-      validator: 13.15.35
 
   '@pinojs/redact@0.4.0': {}
 

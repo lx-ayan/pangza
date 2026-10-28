@@ -27,7 +27,7 @@
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "dependencies": {
-    "@pangza/core": "^1.0.0",
+    "@pangza/core": "workspace:*",
     "redis": "^6.2.1"
   },
   "publishConfig": {

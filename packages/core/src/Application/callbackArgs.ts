@@ -64,6 +64,30 @@ export function resolveRawCallbackArgs(
   return args;
 }
 
+type RequestWithFiles = Request & {
+  cookies?: unknown;
+  file?: unknown;
+  files?: unknown;
+};
+
+/** urlencoded / multipart 字段在 req.body；multer 等会挂 file(s) */
+function resolveFormData(req: Request, fieldName?: string): unknown {
+  const body =
+    req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+  if (fieldName !== undefined) {
+    return body[fieldName];
+  }
+  const anyReq = req as RequestWithFiles;
+  if (anyReq.file !== undefined || anyReq.files !== undefined) {
+    return {
+      ...body,
+      ...(anyReq.file !== undefined ? { file: anyReq.file } : {}),
+      ...(anyReq.files !== undefined ? { files: anyReq.files } : {}),
+    };
+  }
+  return body;
+}
+
 function resolveParamInject(
   req: Request,
   meta: NonNullable<RouteOption["params"]>[number]
@@ -76,7 +100,9 @@ function resolveParamInject(
     case "header":
       return req.headers ?? {};
     case "cookie":
-      return (req as Request & { cookies?: unknown }).cookies ?? {};
+      return (req as RequestWithFiles).cookies ?? {};
+    case "form":
+      return resolveFormData(req, meta.name);
     case "path": {
       const values = Object.values(req.params ?? {});
       if (meta.pathIndex !== undefined) {
@@ -103,7 +129,9 @@ function resolveCallbackArg(req: Request, option?: RouteOption): unknown {
     case ParamType.HEADER:
       return req.headers ?? {};
     case ParamType.COOKIE:
-      return (req as Request & { cookies?: unknown }).cookies ?? {};
+      return (req as RequestWithFiles).cookies ?? {};
+    case ParamType.FORM:
+      return resolveFormData(req);
     case ParamType.PATH:
     case ParamType.PARAMS: {
       const values = Object.values(req.params ?? {});

@@ -13,6 +13,8 @@ export enum ParamType {
   HEADER = "header",
   COOKIE = "cookie",
   PATH = "path",
+  /** application/x-www-form-urlencoded 或 multipart 字段（需 urlencoded / multer 等） */
+  FORM = "form",
 }
 
 /** 参数装饰器注入来源 */
@@ -21,7 +23,8 @@ export type ParamInjectSource =
   | "query"
   | "path"
   | "header"
-  | "cookie";
+  | "cookie"
+  | "form";
 
 /** 单个形参的注入元数据 */
 export interface MethodParamMeta {
@@ -30,6 +33,8 @@ export interface MethodParamMeta {
   source: ParamInjectSource;
   /** @RequestPath(index) 时按路径参数顺序取值 */
   pathIndex?: number;
+  /** @RequestForm("field") 时取单个表单字段 */
+  name?: string;
 }
 
 /** 路由级鉴权 / 入参 / 日志 / 限流 / 防重复提交配置 */

@@ -35,12 +35,34 @@ import { warmupConnections } from './warmup';
 import {
     addRequestInterceptor,
     addResponseInterceptor,
+    addInterceptorRegistration,
     clearInterceptors,
     runRequestInterceptors,
     runResponseInterceptors,
+    runHandlerPreHandle,
+    runHandlerPostHandle,
+    runHandlerAfterCompletion,
+    isHandlerInterceptor,
+    getHandlerInterceptorOptions,
     type RequestInterceptor,
     type ResponseInterceptor,
+    type HandlerInterceptor,
+    type HandlerInfo,
+    type InterceptorOptions,
 } from './interceptors';
+import {
+    addFilterRegistration,
+    clearFilters,
+    createFilterMiddleware,
+    getWebFilterOptions,
+    isFilter,
+    isFiltersMounted,
+    markFiltersMounted,
+    sortedFilterRegistrations,
+    type Filter,
+    type FilterOptions,
+} from './filters';
+import { runWithMethodInvocationContext } from './aop';
 
 /** 可选分包：未安装时鉴权/审计/限流/ORM 相关能力降级跳过 */
 function validateMod(): any {
@@ -146,6 +168,9 @@ export class Application {
     private static ormRegistered = false;
     /** 已注册过的 Controller，防止重复挂路由 */
     private static registeredControllers = new WeakSet<Function>();
+    /** 已注册过的 Filter / Interceptor 类 */
+    private static registeredFilters = new WeakSet<Function>();
+    private static registeredInterceptors = new WeakSet<Function>();
     /** 已 require 过的模块文件 */
     private static loadedFiles = new Set<string>();
     /**
@@ -206,9 +231,132 @@ export class Application {
         return this;
     }
 
-    /** 清空全部请求/响应拦截器 */
+    /**
+     * 注册 Servlet 风格 Filter（实例或类）。
+     * start() 时按 order 挂到路由之前；也可用 `@WebFilter()`。
+     *
+     * @example
+     * Application.addFilter(new TimingFilter(), { urlPatterns: ["/api/**"], order: 1 });
+     */
+    static addFilter(
+        filter: Filter | (new () => Filter),
+        options?: FilterOptions
+    ): typeof Application {
+        if (typeof filter === "function") {
+            return this.registerFilter(
+                filter as unknown as new () => object,
+                options
+            );
+        }
+        addFilterRegistration(filter, options);
+        return this;
+    }
+
+    /**
+     * 注册 Spring MVC 风格 HandlerInterceptor（实例或类）。
+     * 也可用 `@Interceptor()`。
+     *
+     * @example
+     * Application.addInterceptor(new LogInterceptor(), { include: ["/api/**"] });
+     */
+    static addInterceptor(
+        interceptor: HandlerInterceptor | (new () => HandlerInterceptor),
+        options?: InterceptorOptions
+    ): typeof Application {
+        if (typeof interceptor === "function") {
+            return this.registerInterceptor(
+                interceptor as unknown as new () => object,
+                options
+            );
+        }
+        addInterceptorRegistration(interceptor, options);
+        return this;
+    }
+
+    /** 装饰器 / 扫描：注册 Filter 类 */
+    static registerFilter(
+        Ctor: new () => object,
+        options?: FilterOptions
+    ): typeof Application {
+        if (this.registeredFilters.has(Ctor)) {
+            return this;
+        }
+        this.registeredFilters.add(Ctor);
+        const { Container } = require("./container") as {
+            Container: {
+                bindClass: (c: new () => object) => void;
+                get: <T>(c: new () => T) => T;
+            };
+        };
+        Container.bindClass(Ctor);
+        const instance = Container.get(Ctor);
+        if (!isFilter(instance)) {
+            throw new Error(
+                `[Application] ${Ctor.name} 需实现 Filter.doFilter`
+            );
+        }
+        addFilterRegistration(
+            instance,
+            options ?? getWebFilterOptions(Ctor)
+        );
+        return this;
+    }
+
+    /** 装饰器 / 扫描：注册 HandlerInterceptor 类 */
+    static registerInterceptor(
+        Ctor: new () => object,
+        options?: InterceptorOptions
+    ): typeof Application {
+        if (this.registeredInterceptors.has(Ctor)) {
+            return this;
+        }
+        this.registeredInterceptors.add(Ctor);
+        const { Container } = require("./container") as {
+            Container: {
+                bindClass: (c: new () => object) => void;
+                get: <T>(c: new () => T) => T;
+            };
+        };
+        Container.bindClass(Ctor);
+        const instance = Container.get(Ctor);
+        if (!isHandlerInterceptor(instance)) {
+            throw new Error(
+                `[Application] ${Ctor.name} 需实现 HandlerInterceptor 的 preHandle / postHandle / afterCompletion 之一`
+            );
+        }
+        addInterceptorRegistration(
+            instance,
+            options ?? getHandlerInterceptorOptions(Ctor)
+        );
+        return this;
+    }
+
+    /**
+     * 将已注册 Filter 按 order 挂到 Express（路由之前）。
+     * start() 会自动调用；一般无需手动。
+     */
+    static mountFilters(): typeof Application {
+        if (isFiltersMounted()) {
+            return this;
+        }
+        for (const reg of sortedFilterRegistrations()) {
+            app.use(createFilterMiddleware(reg));
+        }
+        markFiltersMounted();
+        return this;
+    }
+
+    /** 清空函数式请求/响应拦截器与 HandlerInterceptor 注册 */
     static clearInterceptors(): typeof Application {
         clearInterceptors();
+        this.registeredInterceptors = new WeakSet<Function>();
+        return this;
+    }
+
+    /** 清空 Filter 注册（需在 start / mountFilters 之前） */
+    static clearFilters(): typeof Application {
+        clearFilters();
+        this.registeredFilters = new WeakSet<Function>();
         return this;
     }
 
@@ -298,7 +446,7 @@ export class Application {
 
     /**
      * 启动服务：
-     * 自动 loadControllers → routes → listen
+     * 自动 loadControllers → mountFilters → routes → listen
      * 使用者通常只需 registry(...).start()
      */
     static start() {
@@ -306,6 +454,7 @@ export class Application {
         if (!this.controllersLoaded) {
             this.loadControllers();
         }
+        this.mountFilters();
         this.routes();
         applicationStart();
         return this;
@@ -449,6 +598,10 @@ export class Application {
             "entity",
             "mapper",
             "service",
+            "filter",
+            "filters",
+            "interceptor",
+            "interceptors",
             "controller",
             "controllers",
             "advice",
@@ -694,14 +847,37 @@ export class Application {
             const startTime = Date.now();
             let result: unknown;
             let error: unknown;
+            const meta = option as RouteRuntimeMeta | undefined;
+            const handler: HandlerInfo = {
+                path,
+                method: method.toUpperCase(),
+                controllerName: meta?.__controllerName,
+                handlerName: meta?.__handlerName,
+                option,
+            };
             try {
                 await this.applyRouteAuth(option, req);
                 await this.applyRouteGuards(option, req);
+
+                const preOk = await runHandlerPreHandle(req, response, handler);
+                if (!preOk || response.headersSent) {
+                    return;
+                }
 
                 const reqCtx = await runRequestInterceptors(req, response, option);
                 if (response.headersSent) {
                     return;
                 }
+
+                const invocationCtx = {
+                    req,
+                    res: response,
+                    option,
+                    path,
+                    httpMethod: method.toUpperCase(),
+                    controllerName: meta?.__controllerName,
+                    handlerName: meta?.__handlerName,
+                };
 
                 if (option?.flux || option?.raw) {
                     if (reqCtx.skipHandler) {
@@ -720,7 +896,9 @@ export class Application {
                         const vm = validateMod()?.validateMethodArgs;
                         if (vm) await vm(args, option.paramTypes ?? []);
                     }
-                    await callback(...args);
+                    await runWithMethodInvocationContext(invocationCtx, () =>
+                        callback(...args)
+                    );
                 } else {
                     if (!reqCtx.skipHandler) {
                         const args = resolveCallbackArgs(req, option, callback.length);
@@ -728,12 +906,26 @@ export class Application {
                             const vm = validateMod()?.validateMethodArgs;
                             if (vm) await vm(args, option.paramTypes ?? []);
                         }
-                        result = await callback(...args);
+                        result = await runWithMethodInvocationContext(
+                            invocationCtx,
+                            () => callback(...args)
+                        );
                     } else {
                         result = reqCtx.data;
                     }
 
-                    const serialized = ObjectMapper.writeValue(result);
+                    let serialized = ObjectMapper.writeValue(result);
+                    serialized = await runHandlerPostHandle(
+                        req,
+                        response,
+                        handler,
+                        serialized
+                    );
+                    if (response.headersSent) {
+                        result = serialized;
+                        return;
+                    }
+
                     const resCtx = await runResponseInterceptors({
                         req,
                         res: response,
@@ -755,6 +947,7 @@ export class Application {
                 error = e;
                 await handleException(req, response, e);
             } finally {
+                await runHandlerAfterCompletion(req, response, handler, error);
                 this.scheduleOperationLog(req, option, {
                     result: error ? undefined : result,
                     error,
@@ -790,7 +983,44 @@ export type {
     ResponseInterceptor,
     RequestInterceptorContext,
     ResponseInterceptorContext,
+    HandlerInterceptor,
+    HandlerInfo,
+    InterceptorOptions,
 } from './interceptors';
+export { Interceptor } from './interceptors';
+export type {
+    Filter,
+    FilterChain,
+    FilterOptions,
+} from './filters';
+export { WebFilter } from './filters';
+export type {
+    MethodInvocation,
+    MethodInvocationContext,
+    AroundAdvice,
+    BeforeAdvice,
+    AfterAdvice,
+    AfterReturningAdvice,
+    AfterThrowingAdvice,
+    AdviceOptions,
+} from './aop';
+export {
+    Around,
+    Before,
+    After,
+    AfterReturning,
+    AfterThrowing,
+    createAroundDecorator,
+    createBeforeDecorator,
+    createAfterDecorator,
+    createAfterReturningDecorator,
+    createAfterThrowingDecorator,
+    markAdvice,
+    registerAroundAdvice,
+    createMarkDecorator,
+    getMethodInvocationContext,
+    getMethodAdvices,
+} from './aop';
 export {
     runApplicationInits,
     runApplicationDestroys,
@@ -815,6 +1045,7 @@ export {
     RequestPath,
     RequestHeader,
     RequestCookie,
+    RequestForm,
     Value,
 } from "./decorators";
 export { Container } from "./container";

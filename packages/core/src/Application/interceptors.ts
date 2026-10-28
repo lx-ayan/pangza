@@ -1,5 +1,11 @@
+import "reflect-metadata";
 import type { Request, Response } from "express";
 import type { RouteOption } from "./types";
+import { matchPathPatterns } from "./pathMatch";
+
+export const HANDLER_INTERCEPTOR_KEY = Symbol.for(
+  "pangza.handlerInterceptor.options"
+);
 
 /** 请求前拦截上下文（鉴权 / 限流之后、Controller 之前） */
 export interface RequestInterceptorContext {
@@ -49,8 +55,75 @@ export type ResponseInterceptor = (
   ctx: ResponseInterceptorContext
 ) => unknown | void | Promise<unknown | void>;
 
+/**
+ * 当前命中的处理器信息（对齐 Spring HandlerInterceptor 的 handler 参数）。
+ */
+export interface HandlerInfo {
+  path: string;
+  method: string;
+  controllerName?: string;
+  handlerName?: string;
+  option?: RouteOption;
+}
+
+/**
+ * Spring MVC HandlerInterceptor：
+ * - preHandle：Controller 前；返回 false 中止（可自行写响应）
+ * - postHandle：Controller 后、写出前；返回值非 undefined 时替换业务数据
+ * - afterCompletion：请求结束（含异常），在 finally 中调用
+ */
+export interface HandlerInterceptor {
+  preHandle?(
+    req: Request,
+    res: Response,
+    handler: HandlerInfo
+  ): boolean | void | Promise<boolean | void>;
+  postHandle?(
+    req: Request,
+    res: Response,
+    handler: HandlerInfo,
+    data: unknown
+  ): unknown | void | Promise<unknown | void>;
+  afterCompletion?(
+    req: Request,
+    res: Response,
+    handler: HandlerInfo,
+    error?: unknown
+  ): void | Promise<void>;
+}
+
+/** @Interceptor / addInterceptor 注册选项 */
+export interface InterceptorOptions {
+  /** 越小越靠前，默认 0 */
+  order?: number;
+  /** 生效路径，默认 `["/**"]` */
+  include?: string[];
+  /** 排除路径 */
+  exclude?: string[];
+}
+
+export interface InterceptorRegistration {
+  interceptor: HandlerInterceptor;
+  order: number;
+  include: string[];
+  exclude: string[];
+}
+
 const requestInterceptors: RequestInterceptor[] = [];
 const responseInterceptors: ResponseInterceptor[] = [];
+const handlerInterceptorRegs: InterceptorRegistration[] = [];
+
+export function isHandlerInterceptor(
+  bean: unknown
+): bean is HandlerInterceptor {
+  if (!bean || typeof bean !== "object") return false;
+  const i = bean as HandlerInterceptor;
+  return (
+    typeof i.preHandle === "function" ||
+    typeof i.postHandle === "function" ||
+    typeof i.afterCompletion === "function"
+  );
+}
 
 export function addRequestInterceptor(fn: RequestInterceptor): void {
   requestInterceptors.push(fn);
@@ -60,9 +133,26 @@ export function addResponseInterceptor(fn: ResponseInterceptor): void {
   responseInterceptors.push(fn);
 }
 
+export function addInterceptorRegistration(
+  interceptor: HandlerInterceptor,
+  options: InterceptorOptions = {}
+): void {
+  handlerInterceptorRegs.push({
+    interceptor,
+    order: options.order ?? 0,
+    include: options.include?.length ? options.include : ["/**"],
+    exclude: options.exclude ?? [],
+  });
+}
+
+export function getHandlerInterceptorRegistrations(): readonly InterceptorRegistration[] {
+  return handlerInterceptorRegs;
+}
+
 export function clearInterceptors(): void {
   requestInterceptors.length = 0;
   responseInterceptors.length = 0;
+  handlerInterceptorRegs.length = 0;
 }
 
 export function getRequestInterceptors(): readonly RequestInterceptor[] {
@@ -71,6 +161,16 @@ export function getRequestInterceptors(): readonly RequestInterceptor[] {
 
 export function getResponseInterceptors(): readonly ResponseInterceptor[] {
   return responseInterceptors;
+}
+
+function sortedHandlerInterceptors(): InterceptorRegistration[] {
+  return [...handlerInterceptorRegs].sort((a, b) => a.order - b.order);
+}
+
+function matchingInterceptors(path: string): InterceptorRegistration[] {
+  return sortedHandlerInterceptors().filter((reg) =>
+    matchPathPatterns(path, reg.include, reg.exclude)
+  );
 }
 
 export async function runRequestInterceptors(
@@ -109,4 +209,88 @@ export async function runResponseInterceptors(
     ctx.handled = true;
   }
   return ctx;
+}
+
+/**
+ * 跑 HandlerInterceptor.preHandle。
+ * @returns false 表示应中止后续 Controller
+ */
+export async function runHandlerPreHandle(
+  req: Request,
+  res: Response,
+  handler: HandlerInfo
+): Promise<boolean> {
+  for (const reg of matchingInterceptors(req.path)) {
+    const fn = reg.interceptor.preHandle;
+    if (!fn) continue;
+    const ok = await fn(req, res, handler);
+    if (ok === false || res.headersSent) return false;
+  }
+  return true;
+}
+
+/** 跑 HandlerInterceptor.postHandle；返回最终 data */
+export async function runHandlerPostHandle(
+  req: Request,
+  res: Response,
+  handler: HandlerInfo,
+  data: unknown
+): Promise<unknown> {
+  let current = data;
+  for (const reg of matchingInterceptors(req.path)) {
+    const fn = reg.interceptor.postHandle;
+    if (!fn) continue;
+    const out = await fn(req, res, handler, current);
+    if (out !== undefined) current = out;
+    if (res.headersSent) break;
+  }
+  return current;
+}
+
+/** 跑 HandlerInterceptor.afterCompletion（逆序，对齐 Spring） */
+export async function runHandlerAfterCompletion(
+  req: Request,
+  res: Response,
+  handler: HandlerInfo,
+  error?: unknown
+): Promise<void> {
+  const list = matchingInterceptors(req.path);
+  for (let i = list.length - 1; i >= 0; i--) {
+    const fn = list[i]!.interceptor.afterCompletion;
+    if (!fn) continue;
+    try {
+      await fn(req, res, handler, error);
+    } catch {
+      // afterCompletion 失败不覆盖原错误
+    }
+  }
+}
+
+/**
+ * 类装饰器：标记 HandlerInterceptor（类加载时自动注册）。
+ *
+ * @example
+ * @Interceptor({ include: ["/api/**"], order: 0 })
+ * class LogInterceptor implements HandlerInterceptor {
+ *   preHandle(req) { console.log(req.method, req.path); return true; }
+ * }
+ */
+export function Interceptor(options: InterceptorOptions = {}): ClassDecorator {
+  return (ctor) => {
+    const Ctor = ctor as unknown as new () => object;
+    Reflect.defineMetadata(HANDLER_INTERCEPTOR_KEY, options, Ctor);
+    const { default: Application } = require("./index") as {
+      default: { registerInterceptor: (c: new () => object) => void };
+    };
+    Application.registerInterceptor(Ctor);
+  };
+}
+
+export function getHandlerInterceptorOptions(
+  ctor: Function
+): InterceptorOptions {
+  return (
+    (Reflect.getMetadata(HANDLER_INTERCEPTOR_KEY, ctor) as InterceptorOptions) ??
+    {}
+  );
 }

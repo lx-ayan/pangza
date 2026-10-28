@@ -198,6 +198,31 @@ export function RequestCookie(): ParameterDecorator {
 }
 
 /**
+ * 注入表单数据（urlencoded / multipart 字段，落在 req.body）。
+ * 需先 `registry(urlencoded({ extended: true }))`；multipart 文件需自行挂 multer 等。
+ *
+ * - `@RequestForm()`：整个表单对象；若存在 `req.file` / `req.files` 一并附上
+ * - `@RequestForm("name")`：单个字段
+ *
+ * @example
+ * @PostMapping("/login")
+ * login(@RequestForm() form: { username: string; password: string }) {}
+ *
+ * @PostMapping("/upload")
+ * upload(@RequestForm("title") title: string) {}
+ */
+export function RequestForm(name?: string): ParameterDecorator {
+  return (target, propertyKey, parameterIndex) => {
+    if (propertyKey === undefined) return;
+    addMethodParam((target as object).constructor, String(propertyKey), {
+      index: parameterIndex,
+      source: "form",
+      name,
+    });
+  };
+}
+
+/**
  * 属性注入：从合并后的 application*.yaml 按路径取值。
  * 支持 `server.port`、`${server.port}`、`${server.port:3990}`；
  * 第二参数为未配置时的默认值（优先于占位符内默认）。
