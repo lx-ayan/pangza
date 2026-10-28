@@ -1,6 +1,7 @@
 {
   "name": "@pangza/validate",
   "version": "1.1.6",
+  "license": "MIT",
   "description": "Parameter validation decorators (Validate / NotNull / ...)",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

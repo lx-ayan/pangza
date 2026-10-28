@@ -1,6 +1,7 @@
 {
   "name": "@pangza/core",
   "version": "1.1.6",
+  "license": "MIT",
   "description": "Application / IoC / Logger / config / Json / Exception",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
