@@ -215,9 +215,11 @@ export class Application {
     /**
      * 追加模块扫描目录（可多次调用）。
      * 目录内带 @Controller 的类会被自动注册进路由。
+     * 推荐 `.scan(__dirname)`：ts-node 跑 src 时扫源码，`node dist/main.js` 时扫编译产物。
      *
      * @example
      * Application
+     *   .scan(__dirname)
      *   .scan('src/business')
      *   .scan('src/modules', 'src/plugins')
      *   .registry(...).start();
@@ -472,6 +474,15 @@ export class Application {
         if (!fs.existsSync(dir)) {
             return;
         }
+        // 无 ts-node/tsx 等 hook 时，require(.ts) 会 SyntaxError；只加载可执行的 JS
+        const canRequireTs = Boolean(
+            (require as NodeJS.Require & { extensions?: Record<string, unknown> })
+                .extensions?.[".ts"]
+        );
+        const entryFile = require.main?.filename
+            ? path.normalize(require.main.filename)
+            : "";
+
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
             const full = path.join(dir, entry.name);
             if (entry.isDirectory()) {
@@ -489,7 +500,21 @@ export class Application {
             ) {
                 continue;
             }
+            // 打包运行时不要 require 源码；同名优先 .js（避免 src 与产物混扫）
+            if (/\.(ts|mts|cts)$/.test(entry.name)) {
+                if (!canRequireTs) {
+                    continue;
+                }
+                const jsSibling = full.replace(/\.(mts|cts|ts)$/, ".js");
+                if (fs.existsSync(jsSibling)) {
+                    continue;
+                }
+            }
             const resolved = path.normalize(full);
+            // 跳过入口自身，避免 scan(dist) 时二次执行 main 导致 Application already started
+            if (entryFile && resolved === entryFile) {
+                continue;
+            }
             if (this.loadedFiles.has(resolved)) {
                 continue;
             }

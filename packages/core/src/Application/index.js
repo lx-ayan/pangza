@@ -442,6 +442,11 @@ var Application = /** @class */ (function () {
         if (!fs_1.default.existsSync(dir)) {
             return;
         }
+        // 无 ts-node/tsx 等 hook 时，require(.ts) 会 SyntaxError；只加载可执行的 JS
+        var canRequireTs = Boolean(require.extensions && require.extensions[".ts"]);
+        var entryFile = require.main && require.main.filename
+            ? path_1.default.normalize(require.main.filename)
+            : "";
         for (var _i = 0, _a = fs_1.default.readdirSync(dir, { withFileTypes: true }); _i < _a.length; _i++) {
             var entry = _a[_i];
             var full = path_1.default.join(dir, entry.name);
@@ -458,7 +463,21 @@ var Application = /** @class */ (function () {
                 entry.name.endsWith(".map")) {
                 continue;
             }
+            // 打包运行时不要 require 源码；同名优先 .js（避免 src 与产物混扫）
+            if (/\.(ts|mts|cts)$/.test(entry.name)) {
+                if (!canRequireTs) {
+                    continue;
+                }
+                var jsSibling = full.replace(/\.(mts|cts|ts)$/, ".js");
+                if (fs_1.default.existsSync(jsSibling)) {
+                    continue;
+                }
+            }
             var resolved = path_1.default.normalize(full);
+            // 跳过入口自身，避免 scan(dist) 时二次执行 main 导致 Application already started
+            if (entryFile && resolved === entryFile) {
+                continue;
+            }
             if (this.loadedFiles.has(resolved)) {
                 continue;
             }
