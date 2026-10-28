@@ -1,6 +1,6 @@
 # 发包手册（@pangza/* + CLI）
 
-**可以发了。** 当前 `1.1.5` 已能完整 `build:lib`。下面按顺序在你本机终端操作（2FA / Security Key 需要你确认）。
+**可以发了。** 当前 `1.1.7` 已能完整 `build:lib`。下面按顺序在你本机终端操作（2FA / Security Key 需要你确认）。
 
 ## 发哪些包
 
@@ -16,7 +16,7 @@
 | `pangza/packages/encrypt` | `@pangza/encrypt` | |
 | `pangza-cli/` | `pangza` | CLI：`pangza init` / `pangza g` |
 
-> 脚本会把 `workspace:*` 临时改成 `^1.1.5` 再 publish，发完自动还原，不用手改。
+> 脚本会把 `workspace:*` 临时改成 `^1.1.7` 再 publish，发完自动还原，不用手改。
 
 ## 导入约定（1.1.0）
 
@@ -109,7 +109,7 @@ npm i @pangza/validate
 
 ## 注意
 
-1. **版本**：根目录与各包当前都是 `1.1.5`。若 npm 上已有同名同版本，要么升版本再发，要么无法覆盖。
+1. **版本**：根目录与各包当前都是 `1.1.7`。若 npm 上已有同名同版本，要么升版本再发，要么无法覆盖。
 2. **不要**在 `packages/*/package.json` 里长期写成 `file:` 再发布；日常开发用 `workspace:*`，交给 `publish-lib.js` 改写。
 3. **破坏性变更**：`Validate` 不再从 `@pangza/core` / Application 导出；`Mapper` / `MapperType` 改从 `@pangza/orm` 导入。
 
