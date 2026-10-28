@@ -49,6 +49,7 @@ class AppContainer {
 
   /**
    * 按类绑定单例，并在首次解析时执行 activation（如 @ConditionOnProperty 灌配置）。
+   * 若该类已被 @Component 等先 bindClass，则 rebind 挂上 activation（装饰器顺序无关）。
    */
   bindClassWithActivation<T>(
     ctor: Ctor<T>,
@@ -56,6 +57,11 @@ class AppContainer {
   ): void {
     this.ensureInjectable(ctor);
     if (this.raw.isBound(ctor)) {
+      this.raw
+        .rebind(ctor)
+        .toSelf()
+        .inSingletonScope()
+        .onActivation((_ctx: unknown, instance: T) => activate(instance));
       return;
     }
     this.raw

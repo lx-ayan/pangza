@@ -1,6 +1,6 @@
 {
   "name": "@pangza/auth",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "Auth / 登录态与权限",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

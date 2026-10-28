@@ -5,7 +5,7 @@ const OPTIONS_KEY = Symbol.for("pangza.conditionOnProperty.options");
 const APPLIED_KEY = Symbol.for("pangza.conditionOnProperty.applied");
 
 export type ConditionOnPropertyOptions = {
-  /** YAML 前缀，如 "redis" → redis.host */
+  /** YAML 前缀，如 "redis" → redis.host；"ai.model.agnes" → ai.model.agnes.* */
   prefix: string;
   /**
    * 装饰器级默认值：仅当属性自身没有初始值、且 YAML 也没有时使用。
@@ -23,6 +23,34 @@ function readYaml(path: string): unknown {
   // 懒加载，避免与 config/index 循环依赖
   const { getConfigValue } = require("./index") as typeof import("./index");
   return getConfigValue(path, undefined);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * 收集要灌入的属性名：
+ * - 实例已有自有属性（含 useDefineForClassFields 下的 undefined）
+ * - defaults 的 key
+ * - YAML 前缀节点下的 key（解决 `field!: type` 未出现在 Object.keys 的问题）
+ */
+function collectKeys(
+  instance: object,
+  defaults: Record<string, unknown>,
+  prefix: string
+): Set<string> {
+  const keys = new Set<string>([
+    ...Object.keys(instance),
+    ...Object.keys(defaults),
+  ]);
+  const yamlBag = readYaml(prefix);
+  if (isPlainObject(yamlBag)) {
+    for (const key of Object.keys(yamlBag)) {
+      keys.add(key);
+    }
+  }
+  return keys;
 }
 
 /**
@@ -46,12 +74,7 @@ export function applyConditionOnProperty(
     | undefined;
   const defaults = options?.defaults ?? {};
 
-  const keys = new Set<string>([
-    ...Object.keys(instance),
-    ...Object.keys(defaults),
-  ]);
-
-  for (const key of keys) {
+  for (const key of collectKeys(instance, defaults, prefix)) {
     if (key === "constructor") continue;
     const own = (instance as Record<string, unknown>)[key];
     if (own !== undefined) {
@@ -69,17 +92,19 @@ export function applyConditionOnProperty(
 }
 
 /**
- * 类装饰器：按 YAML 前缀自动注入属性。
+ * 类装饰器：按 YAML 前缀自动注入属性，并注册到 IoC（无需再写 @Component）。
  *
  * - 标注前缀后，`prefix.属性名` 对应 application*.yaml
  * - **优先自己定义的默认值**（字段初始值）；未设默认值时才读 YAML
  * - `defaults` 选项作为 YAML 也缺失时的回退
+ * - 可与 `@Component()` 同用；无论装饰器上下顺序，都会挂上灌配置的 activation
  *
  * @example
- * @ConditionOnProperty("redis")
- * class RedisSettings {
- *   host = "127.0.0.1"; // 有默认值 → 用该值，忽略 yaml
- *   port!: number;      // 无默认值 → 读 redis.port
+ * @ConditionOnProperty("ai.model.agnes")
+ * class AgnesModel {
+ *   apiKey?: string;
+ *   modelName!: string;
+ *   baseURL!: string;
  * }
  *
  * @ConditionOnProperty({ prefix: "server", defaults: { port: 3990 } })

@@ -1,6 +1,6 @@
 {
   "name": "@pangza/encrypt",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "AES encrypt helpers",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
