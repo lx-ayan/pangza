@@ -1,0 +1,35 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "composite": false,
+    "incremental": false,
+    "baseUrl": ".",
+    "paths": {
+      "@pangza/core": [
+        "../core/dist/index"
+      ],
+      "@pangza/core/*": [
+        "../core/dist/*"
+      ],
+      "@pangza/auth": [
+        "../auth/dist/index"
+      ],
+      "@pangza/auth/*": [
+        "../auth/dist/*"
+      ],
+      "inversify": [
+        "../core/node_modules/inversify/lib/index.d.ts",
+        "../../node_modules/inversify/lib/index.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "baseUrl": ".",
+    "paths": {
+      "inversify": [
+        "./node_modules/inversify/lib/index.d.ts",
+        "../../node_modules/inversify/lib/index.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*",
+    "stubs/**/*.d.ts"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules"
+  ]
+}
