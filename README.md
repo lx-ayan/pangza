@@ -29,14 +29,6 @@ pnpm install
 pnpm run build:lib
 ```
 
-## Publish
-
-```bash
-pnpm run build:lib
-pnpm run publish:lib
-pnpm run publish:lib -- --with-cli
-```
-
 ## Use
 
 ```bash
